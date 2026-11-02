@@ -2,7 +2,7 @@
 
 输入一条长视频、整片修改要求及人物、声音、产品等素材，让 Codex 按镜头分段制作，验收后拼接成完整 MP4。适合整体换人、换声音、换场景或改口播。默认火山方舟 Seedance 2.0、720p；用户当次要求优先。
 
-**[下载完整 Skill ZIP](https://github.com/Aiintalk/long-video-remake-skill/releases/latest/download/long-video-remake.skill.zip)** · [查看 Skill 指令](skills/long-video-remake/SKILL.md)
+**[下载完整 Skill ZIP](https://github.com/Aiintalk/long-video-remake-skill/releases/latest/download/long-video-remake.skill.zip)** · [备用直链](https://raw.githubusercontent.com/Aiintalk/long-video-remake-skill/main/downloads/long-video-remake.skill.zip) · [查看 Skill 指令](skills/long-video-remake/SKILL.md)
 
 ## 安装
 
