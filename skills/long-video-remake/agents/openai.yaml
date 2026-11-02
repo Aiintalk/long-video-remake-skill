@@ -1,0 +1,4 @@
+interface:
+  display_name: "长视频自动翻制成片"
+  short_description: "长视频换人换声、分段生成并交付完整 MP4"
+  default_prompt: "使用 $long-video-remake，按这条长视频、我的修改要求和素材直接制作完整 MP4。"
