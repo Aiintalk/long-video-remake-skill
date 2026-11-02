@@ -43,6 +43,17 @@ def probe(path):
             "fps": float(fps[1]) if fps else None, "has_audio": any(" Audio: " in line for line in info.splitlines())}
 
 
+def probe_audio(path):
+    path = Path(path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    info = run([ffmpeg(), "-hide_banner", "-i", str(path)], allow_failure=True).stderr
+    duration = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", info)
+    if not duration or not any(" Audio: " in line for line in info.splitlines()):
+        raise ValueError(f"无法读取替换音频：{path.name}")
+    return int(duration[1]) * 3600 + int(duration[2]) * 60 + float(duration[3])
+
+
 def boundaries(duration, cuts):
     if duration <= 0:
         raise ValueError("视频时长无效。")
@@ -124,12 +135,12 @@ def init(args):
              "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-movflags", "+faststart", str(clip)])
         segments.append({"id": sid, "source_start": start, "source_end": end, "source_clip": f"refs/{sid}.mp4",
                          "operation": args.mode, "source_ref_url": None, "spec": None, "candidate_video": None,
-                         "candidate_spec_sha256": None, "accepted_video": None, "dialogue": "", "notes": ""})
+                         "candidate_spec_sha256": None, "accepted_video": None, "replacement_audio": None,
+                         "audio_policy": "keep", "changes": [], "preserve": [], "dialogue": "", "notes": ""})
     manifest = {"version": 1, "source": source, "model": ark.MODEL, "resolution": args.resolution,
                 "ratio": ratio, "project_name": args.project_name,
-                "global_requirements": {"replace_person": False, "replace_voice": False, "target_person": "",
-                                        "target_voice": "", "preserve": [], "change": []},
-                "music": None, "subtitles": None, "segments": segments, "final_video": None}
+                "global_requirements": {"changes": [], "preserve": [], "asset_anchors": {}, "forbidden_inheritance": []},
+                "music": None, "music_volume": 0.12, "subtitles": None, "segments": segments, "final_video": None}
     save(manifest, manifest_path)
     print(json.dumps({"manifest": str(manifest_path), "segments": len(segments), "duration": source["duration"],
                       "generation_seconds": sum(s["source_end"] - s["source_start"] for s in segments if s["operation"] == "generate")},
@@ -223,18 +234,73 @@ def dimensions(ratio, resolution):
 def assemble(args):
     manifest, path = load(args.manifest)
     project = path.parent
+    output = resolve(project, args.output or "final.mp4")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    music = resolve(project, manifest.get("music"))
+    subtitles = resolve(project, manifest.get("subtitles"))
+    music_volume = manifest.get("music_volume", 0.12)
+    if not isinstance(music_volume, (int, float)) or isinstance(music_volume, bool) or not 0 <= music_volume <= 1:
+        raise ValueError("music_volume 必须在 0 到 1 之间。")
+    if music and not music.is_file():
+        raise FileNotFoundError(music)
+    if subtitles and not subtitles.is_file():
+        raise FileNotFoundError(subtitles)
+    source = Path(manifest["source"]["path"])
+    if output == source.resolve():
+        raise ValueError("导出位置不能覆盖原片。")
+    all_reused = all(s["operation"] == "reuse" and s.get("audio_policy", "keep") == "keep" for s in manifest["segments"])
+    if all_reused and not subtitles:
+        source_media = probe(source)
+        if not music and source_media["has_audio"]:
+            shutil.copy2(source, output)
+        elif music:
+            command = [ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(source),
+                       "-stream_loop", "-1", "-i", str(music), "-map", "0:v:0", "-c:v", "copy"]
+            if source_media["has_audio"]:
+                command += ["-filter_complex", f"[0:a]volume=1[a0];[1:a]volume={music_volume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+                            "-map", "[aout]"]
+            else:
+                command += ["-map", "1:a:0"]
+            command += ["-c:a", "aac", "-b:a", "160k", "-t", str(source_media["duration"]),
+                        "-movflags", "+faststart", str(output)]
+            run(command)
+        else:
+            all_reused = False
+        if all_reused:
+            verify(output)
+            manifest["final_video"] = str(output)
+            save(manifest, path)
+            print(json.dumps({"final_video": str(output), "duration": probe(output)["duration"],
+                              "segments": len(manifest["segments"]), "video_stream_copied": True}, ensure_ascii=False))
+            return
     width, height = dimensions(manifest["ratio"], manifest["resolution"])
     normalized = []
     for segment in manifest["segments"]:
-        src = resolve(project, segment.get("accepted_video") if segment["operation"] == "generate" else segment["source_clip"])
+        operation = segment["operation"]
+        if operation not in ("reuse", "generate", "replace_audio"):
+            raise ValueError(f"{segment['id']} 的操作类型无效。")
+        src = resolve(project, segment.get("accepted_video") if operation == "generate" else segment["source_clip"])
         if src is None or not src.is_file():
             raise ValueError(f"{segment['id']} 未完成验收或源文件缺失，不能导出成片。")
         media = probe(src)
+        audio_policy = segment.get("audio_policy", "keep")
+        if audio_policy not in ("keep", "mute"):
+            raise ValueError(f"{segment['id']} 的音频策略无效。")
+        replacement = resolve(project, segment.get("replacement_audio")) if operation == "replace_audio" else None
+        if operation == "replace_audio":
+            if replacement is None:
+                raise ValueError(f"{segment['id']} 缺少替换音频。")
+            audio_duration = probe_audio(replacement)
+            if audio_duration > media["duration"] + 0.25:
+                raise ValueError(f"{segment['id']} 替换音频长于画面，不能静默截断；请调整时间轴。")
         dest = project / "work" / f"{segment['id']}-normalized.mp4"
         command = [ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-i", str(src)]
-        if not media["has_audio"]:
+        if replacement:
+            command += ["-i", str(replacement)]
+        elif audio_policy == "mute" or not media["has_audio"]:
             command += ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]
-        command += ["-map", "0:v:0", "-map", "0:a:0" if media["has_audio"] else "1:a:0",
+        audio_map = "1:a:0" if replacement or audio_policy == "mute" or not media["has_audio"] else "0:a:0"
+        command += ["-map", "0:v:0", "-map", audio_map,
                     "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,fps=30,format=yuv420p",
                     "-af", "aresample=48000,apad", "-c:v", "libx264", "-preset", "veryfast", "-crf", "19",
                     "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2", "-t", str(media["duration"]), str(dest)]
@@ -245,14 +311,6 @@ def assemble(args):
     joined = project / "work" / "joined.mp4"
     run([ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
          "-c", "copy", str(joined)])
-    output = resolve(project, args.output or "final.mp4")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    music = resolve(project, manifest.get("music"))
-    subtitles = resolve(project, manifest.get("subtitles"))
-    if music and not music.is_file():
-        raise FileNotFoundError(music)
-    if subtitles and not subtitles.is_file():
-        raise FileNotFoundError(subtitles)
     if not music and not subtitles:
         shutil.copy2(joined, output)
     else:
@@ -265,7 +323,7 @@ def assemble(args):
         else:
             command += ["-c:v", "copy"]
         if music:
-            command += ["-filter_complex", "[0:a]volume=1[a0];[1:a]volume=0.12[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
+            command += ["-filter_complex", f"[0:a]volume=1[a0];[1:a]volume={music_volume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
                         "-map", "0:v:0", "-map", "[aout]"]
         else:
             command += ["-map", "0:v:0", "-map", "0:a:0"]
@@ -293,7 +351,7 @@ def parser():
     x.add_argument("--min-gap", type=float, default=1.0); x.add_argument("--output")
     x = sub.add_parser("init"); x.add_argument("--input", required=True); x.add_argument("--output", required=True)
     x.add_argument("--cuts", help="JSON 秒数数组，可在镜头分析后提供")
-    x.add_argument("--mode", choices=["generate", "reuse"], default="generate")
+    x.add_argument("--mode", choices=["generate", "reuse", "replace_audio"], default="reuse")
     x.add_argument("--ratio", choices=["9:16", "16:9", "1:1", "4:3", "3:4", "21:9"])
     x.add_argument("--resolution", choices=["480p", "720p", "1080p"], default="720p")
     x.add_argument("--project-name", default="default")
