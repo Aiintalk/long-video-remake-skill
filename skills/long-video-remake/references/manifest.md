@@ -19,7 +19,7 @@
 | `segments[].spec` | 该段的 Seedance 请求 JSON，相对项目目录或绝对路径；更新提示词用新版本文件名 |
 | `segments[].candidate_video` | 已生成、待验收片段，由工具填写 |
 | `segments[].accepted_video` | 看听验收后采纳的视频，由 `project accept` 填写 |
-| `segments[].dialogue`, `notes` | 最终应说台词、动作/连续性和质检记录 |
+| `segments[].dialogue`, `notes` | 最终应说台词、动作/连续性和质检记录；换人物但动作不变时，在 `notes` 记录关键动作的相对时间锚点 |
 | `music`, `music_volume`, `subtitles` | 可选背景音乐、其混音音量（默认 0.12）和 SRT 路径 |
 | `final_video` | 完整 MP4，由 `project assemble` 填写 |
 
