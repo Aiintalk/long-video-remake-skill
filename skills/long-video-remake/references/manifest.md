@@ -8,7 +8,7 @@
 | `model`, `resolution`, `ratio`, `project_name` | 全片生成与导出规格，默认 Seedance 2.0、720p |
 | `global_requirements.changes` | 用户指定的一个或多个改动点、作用范围及目标结果 |
 | `global_requirements.preserve` | 用户明确要求保持的内容；未提到的属性也默认保留 |
-| `global_requirements.asset_anchors` | 需要跨段统一的新素材及其用途 |
+| `global_requirements.asset_anchors` | 需要跨段统一的新素材、可核对的外观/场景/产品描述及其用途 |
 | `global_requirements.forbidden_inheritance` | 不能从参考片继承的旧属性 |
 | `segments[]` | 按时间码排序的短段；每段有稳定 `id`、`source_start/end` 和 `source_clip` |
 | `segments[].operation` | `reuse` 原片复用，`replace_audio` 保留画面并换完整音轨，`generate` 生成变化画面；默认 `reuse` |
